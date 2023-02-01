@@ -18,7 +18,8 @@ type Var = String
 
 data PrimOp
   = Eq Expression Expression -- general operations
-
+  
+  | Neg Expression
   | Add Expression Expression
   | Sub Expression Expression
   | Mult Expression Expression
@@ -30,12 +31,14 @@ data PrimOp
   | BOr Expression Expression
   | BAnd Expression Expression
   | BNot Expression -- boolean operations
+  deriving(Show)
 
 data Expression  
   = Var Var
   | Const Value
   | PrimOp PrimOp
   | Apply Var [Expression]
+  deriving(Show)
 
 data Statement
   = Exp Expression
@@ -47,6 +50,7 @@ data Statement
   | Print Expression
   | SepDel Integer
   | Return Expression
+  deriving(Show)
 
 type Code = [Statement]
 type FunDef = (Var, [(Var,Value)], Code)
@@ -125,6 +129,11 @@ eval (PrimOp op) env fenv =
       v1 <- eval e1 env fenv
       v2 <- eval e2 env fenv
       return $ BolV (Just (v1==v2))
+    Neg e         -> do
+      v <- eval e env fenv
+      case v of
+        IntV (Just x) -> return $ IntV (Just (-x))
+        _             -> error "type missmatch"
     Add e1 e2     -> helper handleIntOp (+) e1 e2 env fenv 
     Sub e1 e2     -> helper handleIntOp (-) e1 e2 env fenv
     Mult e1 e2    -> helper handleIntOp (*) e1 e2 env fenv
