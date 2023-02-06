@@ -18,7 +18,8 @@ type Var = String
 
 data PrimOp
   = Eq Expression Expression -- general operations
-
+  
+  | Neg Expression
   | Add Expression Expression
   | Sub Expression Expression
   | Mult Expression Expression
@@ -30,12 +31,14 @@ data PrimOp
   | BOr Expression Expression
   | BAnd Expression Expression
   | BNot Expression -- boolean operations
+  deriving(Show)
 
 data Expression  
   = Var Var
   | Const Value
   | PrimOp PrimOp
   | Apply Var [Expression]
+  deriving(Show)
 
 data Statement
   = Exp Expression
@@ -47,9 +50,10 @@ data Statement
   | Print Expression
   | SepDel Integer
   | Return Expression
+  deriving(Show)
 
 type Code = [Statement]
-type FunDef = (Var, [(Var,Value)], Code)
+type FunDef = (Var, Value ,[(Var,Value)], Code)
 type FunEnv = [FunDef]
 type Env = [(Var, EnvNode)]
 data EnvNode  
@@ -66,7 +70,7 @@ eqtype [] _ = False
 
 findFunction :: Var -> [Value] -> FunEnv -> FunDef
 findFunction f args = 
-  head . filter (\(x,a,_) -> x == f && eqtype (map snd a) args)
+  head . filter (\(x,_,a,_) -> x == f && eqtype (map snd a) args)
 findReplaceFirst :: (a -> Bool) -> a -> [a] -> [a]
 findReplaceFirst _ _ [] = []
 findReplaceFirst p a (x:xs)
@@ -125,6 +129,11 @@ eval (PrimOp op) env fenv =
       v1 <- eval e1 env fenv
       v2 <- eval e2 env fenv
       return $ BolV (Just (v1==v2))
+    Neg e         -> do
+      v <- eval e env fenv
+      case v of
+        IntV (Just x) -> return $ IntV (Just (-x))
+        _             -> error "type missmatch"
     Add e1 e2     -> helper handleIntOp (+) e1 e2 env fenv 
     Sub e1 e2     -> helper handleIntOp (-) e1 e2 env fenv
     Mult e1 e2    -> helper handleIntOp (*) e1 e2 env fenv
@@ -142,8 +151,8 @@ eval (PrimOp op) env fenv =
 
 eval (Apply f args) env fenv = do
   args <- mapM (\x -> eval x env fenv) args
-  let (_, params, body) = findFunction f args fenv in 
-    interpreter body (mkEnv params args) fenv 0
+  let (_,ret_type, params, body) = findFunction f args fenv in 
+    interpreter body (mkEnv params args) fenv 0 ret_type f
 
 mkEnv :: [(Var, Value)] -> [Value] -> Env
 mkEnv ((x,_):xs) (y:ys) = (x, Value y): mkEnv xs ys
@@ -163,23 +172,29 @@ handleBoolOp :: (Bool -> Bool -> Bool) -> Value -> Value -> Value
 handleBoolOp op (BolV (Just a)) (BolV (Just b)) = BolV (Just (op a b))
 handleBoolOp _ _ _ = error "type error"
 
-interpreter :: Code -> Env -> FunEnv -> Integer -> IO Value
-interpreter [] env fenv _ = return Void
+interpreter :: Code -> Env -> FunEnv -> Integer -> Value -> String -> IO Value
+interpreter [] env fenv _ Void _ = return Void
+interpreter [] _ _ _ _ f = error $ 
+  "In " ++ f ++ " type missmatch, function with return type different than void should have explicit return instruction"
 
-interpreter ((Return x):rest) env fenv s = do
-  eval x env fenv
-  
-interpreter ((Exp e):rest) env fenv s = eval e env fenv >> interpreter rest env fenv s
+interpreter ((Return x):rest) env fenv s ret_type name = do
+  ret <- eval x env fenv
+  if isSameType ret ret_type then
+    return ret
+  else
+    error $ "type missmatch, function " ++ name ++ " should return " ++ show ret_type ++ " but returns " ++ show ret
 
-interpreter ((Declaration {n = x,e = e}):rest) env fenv s = do
+interpreter ((Exp e):rest) env fenv s ret_type name = eval e env fenv >> interpreter rest env fenv s ret_type name
+
+interpreter ((Declaration {n = x,e = e}):rest) env fenv s ret_type name = do
   v <- eval e env fenv 
-  let new_env = envAdd x v env in interpreter rest new_env fenv s
+  let new_env = envAdd x v env in interpreter rest new_env fenv s ret_type name
 
-interpreter ((Assign {n = x, e = e}):rest) env fenv s = do
+interpreter ((Assign {n = x, e = e}):rest) env fenv s ret_type name = do
   v <- eval e env fenv
-  let new_env = envChange x v env in interpreter rest new_env fenv s
+  let new_env = envChange x v env in interpreter rest new_env fenv s ret_type name
 
-interpreter ((Input x):rest) env fenv s = 
+interpreter ((Input x):rest) env fenv s ret_type name= 
   getLine >>=
   (\val -> case envLookup x env of
   Nothing -> error $ "Variable " ++ x ++ "not in scope"
@@ -188,31 +203,33 @@ interpreter ((Input x):rest) env fenv s =
                                  IntV _ -> IntV (Just (read val)) -- maybe change this later
                                  StrV _ -> StrV (Just val) -- there should be a better way to do that
                                  BolV _ -> BolV (Just (read val))
-                  in interpreter (Assign {n = x, e = Const new_val}:rest) env fenv s)
+                  in interpreter (Assign {n = x, e = Const new_val}:rest) env fenv s ret_type name)
 
-interpreter ((Print e):rest) env fenv s = do
+interpreter ((Print e):rest) env fenv s ret_type name = do
   eval e env fenv >>= \case
     IntV (Just x) -> print x
     StrV (Just x) -> putStrLn x
     BolV (Just x) -> print x
     _             -> putStrLn "Void"
-  interpreter rest env fenv s
+  interpreter rest env fenv s ret_type name
 
-interpreter ((If {cond = c, body = b, els = e}):rest) env fenv sepnum =
+interpreter ((If {cond = c, body = b, els = e}):rest) env fenv sepnum ret_type name =
   eval c env fenv >>= \case 
-    BolV (Just c)  -> interpreter ((if c then b else e) ++ SepDel sepnum:rest) (envSepAdd sepnum env) fenv (sepnum+1)
+    BolV (Just c)  -> interpreter ((if c then b else e) ++ SepDel sepnum:rest) (envSepAdd sepnum env) fenv (sepnum+1) ret_type name
     BolV Nothing      -> error "condition is not defined"
     _                 -> error "condition is not of type Bool" -- maybe add case for Integer condition
 
-interpreter ((While {cond = c, body = b}):rest) env fenv sepnum =
+interpreter ((While {cond = c, body = b}):rest) env fenv sepnum ret_type name =
   eval c env fenv >>= \case 
-    BolV (Just True) -> interpreter (b ++ SepDel sepnum:(While {cond=c, body = b}):rest) (envSepAdd sepnum env) fenv (sepnum+1)
-    _                -> interpreter rest env fenv sepnum
+    BolV (Just True) -> interpreter (b ++ SepDel sepnum:(While {cond=c, body = b}):rest) (envSepAdd sepnum env) fenv (sepnum+1) ret_type name
+    _                -> interpreter rest env fenv sepnum ret_type name
 
-interpreter ((SepDel n):rest) env fenv sepnum
+interpreter ((SepDel n):rest) env fenv sepnum ret_type name
   | n >= sepnum = error "Stack is in bad state LOL" -- same as before
-  | otherwise = interpreter rest (envSepRem n env) fenv n
+  | otherwise = interpreter rest (envSepRem n env) fenv n ret_type name
 
 run :: FunEnv -> IO ()
 -- TODO add support for commandline arguments
-run fenv = void $ interpreter (fromJust $ Prelude.lookup "main" $ map (\(x,_,y) -> (x,y)) fenv) envEmpty fenv 0
+run fenv = do 
+  let (_,ret_type,_,code) = findFunction "main" [] fenv in
+    void $ interpreter code envEmpty fenv 0 ret_type "main"
