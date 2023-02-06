@@ -11,13 +11,16 @@ import Text.Megaparsec.Debug
 
 type Parser = Parsec Void String
 
+run = runParser sourceParser
+
 funParser :: Parser FunDef
 funParser = do
+  sc
   void $ symbol "fn"
   args <- parens $ sepBy (do
-    a <- (do {(Var x) <- pVariable; return x})
-    sc 
     t <- typeParser 
+    sc
+    a <- (do {(Var x) <- pVariable; return x})
     return (a,t))
     (symbol ",")
   sc
@@ -25,8 +28,8 @@ funParser = do
   sc
   (Var name) <- pVariable
   void $ symbol ":"
-  body <- manyTill statementParser (symbol "end")
-  return (name,args,body)
+  body <- manyTill (do {sc; statementParser}) (symbol "end")
+  return (name,rettype,args,body)
 
 sourceParser :: Parser FunEnv
 sourceParser = many funParser
@@ -87,6 +90,7 @@ operatorTable =
   , [ binary "+" (\x y -> PrimOp $ Add x y)
     , binary "-" (\x y -> PrimOp $ Sub x y)
     ]
+  , [ binary "=="  (\x y -> PrimOp $ Eq x y)]
   , [ binary "and" (\x y -> PrimOp $ BAnd x y)]
   , [ binary "or"  (\x y -> PrimOp $ BOr x y)]
   ]
