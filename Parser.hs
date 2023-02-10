@@ -80,7 +80,10 @@ statementParser = choice
 
 operatorTable :: [[Operator Parser Expression]]
 operatorTable =
-  [ [ prefix "-" (PrimOp . Neg)
+  [ [ binary "^" (\x y -> PrimOp $ Pow x y)
+    , binary "@" (\x y -> PrimOp $ Concat x y)
+    ]
+  , [ prefix "-" (PrimOp . Neg)
     , prefix "+" id
     , prefix "!" (PrimOp . BNot)
     ]
