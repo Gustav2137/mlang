@@ -1,3 +1,6 @@
+# Compiling
+Either `ghc Mlang.hs -o mlang` or `ghc Mlang.hs -o mlang -dynamic` should work.
+
 # Mlang syntax
 
 I highly encourage every reader to see the examples provided in `examples` directory of this repo. Everything written below is subject to change in future versions (if there be any).
